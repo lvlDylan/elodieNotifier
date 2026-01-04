@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/url"
-	"os/exec"
+	"os"
+	"strings"
 
 	"github.com/gorilla/websocket"
 )
@@ -12,24 +14,45 @@ import (
 type Notification struct {
 	Title string `json:"title"`
 	Msg   string `json:"message"`
+	Image string `json:"image"`
 }
 
-const wsURL = "wss://elodie.dylanlv.dev/ws/"
+const wssURL = "wss://elodie.dylanlv.dev/ws/"
+const wsURL = "ws://localhost:3001"
 
-func notifySend(title string, message string) {
-	appName := "Bibus Notifications"
-	imagePath := "example/path/img.jpg"
-	cmd := exec.Command("notify-send", "-a", appName, "-i", imagePath, title, message)
-
-	if err := cmd.Run(); err != nil {
-		log.Printf("Error sending notification: %v", err)
+func saveImageToTemp(base64String string) (string, error) {
+	parts := strings.Split(base64String, ",")
+	if len(parts) != 2 {
+		if len(parts) == 1 && len(base64String) > 10 {
+		} else {
+			return "", nil
+		}
 	}
+
+	dataStr := parts[len(parts)-1]
+
+	dec, err := base64.StdEncoding.DecodeString(dataStr)
+	if err != nil {
+		return "", err
+	}
+
+	tmpFile, err := os.CreateTemp("", "bibus-*.png")
+	if err != nil {
+		return "", err
+	}
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(dec); err != nil {
+		return "", err
+	}
+
+	return tmpFile.Name(), nil
 }
 
 func main() {
-	u, err := url.Parse(wsURL)
+	u, err := url.Parse(wssURL)
 	if err != nil {
-		log.Fatal("URL invalid : %v", err)
+		log.Fatal("URL invalid : ", err)
 	}
 
 	log.Printf("Connecting to %s", u.String())
@@ -37,7 +60,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error connecting to %s: %v", u.String(), err)
 	}
-	defer conn.Close()
+	defer func(conn *websocket.Conn) {
+		err := conn.Close()
+		if err != nil {
+			log.Printf("Error closing websocket: %v", err)
+		}
+	}(conn)
 
 	log.Println("Connected to websocket server")
 
@@ -62,7 +90,17 @@ func main() {
 				displayTitle = "Notifications de Bibus"
 			}
 
-			notifySend(displayTitle, notif.Msg)
+			var currentIconPath string
+			if notif.Image != "" {
+				path, err := saveImageToTemp(notif.Image)
+				if err != nil {
+					log.Printf("Failed to save image: %v", err)
+				} else {
+					currentIconPath = path
+				}
+			}
+
+			notifySend(displayTitle, notif.Msg, currentIconPath)
 		}
 	}
 }
